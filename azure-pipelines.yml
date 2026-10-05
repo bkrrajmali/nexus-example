@@ -1,0 +1,89 @@
+trigger:
+- dev
+
+pool:
+  name: 'localubuntu'
+
+variables:
+  nexusMavenRepoId: 'nexus'
+  nexusMavenRepoUrl: 'http://192.168.0.228:8081/repository/maven-releases/'
+  nexusDockerServiceConnection: 'nexus-docker'
+  nexusMavenServiceConnection: 'nexus-maven'
+
+  azureArtifactsFeed: 'demo'
+  azureArtifactsUrl: 'https://win-181rfggimbl/DefaultCollection/Nexus_pipeline/_packaging/demo/maven/v1'
+
+  javaHome: '/usr/lib/jvm/java-17-openjdk-amd64'
+  mavenOpts: '-Xmx1024m'
+
+  artifactVersion: '6.2.5-$(Build.BuildId)'
+
+  imageRepository: 'petclinic'
+  imageTag: 'latest'
+
+stages:
+  - stage: Build
+    displayName: 'Build & Publish Artifacts'
+    jobs:
+      - job: Build
+        displayName: 'Build, Publish Artifacts & Docker Image'
+        steps:
+          - task: Maven@4
+            displayName: 'Maven Clean Verify'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'clean verify'
+              mavenOptions: '$(mavenOpts)'
+              javaHomeOption: 'Path'
+              jdkDirectory: '$(javaHome)'
+              mavenVersionOption: 'Default'
+
+          - task: MavenAuthenticate@0
+            displayName: 'Authenticate Maven (Nexus + Azure Artifacts)'
+            inputs:
+              artifactsFeeds: '${{ variables.azureArtifactsFeed }}'
+              mavenServiceConnections: '${{ variables.nexusMavenServiceConnection }}'
+
+          - task: Maven@4
+            displayName: 'Set Unique Artifact Version'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'versions:set'
+              options: '-DnewVersion=$(artifactVersion) -DgenerateBackupPoms=false'
+              mavenOptions: '$(mavenOpts)'
+              javaHomeOption: 'Path'
+              jdkDirectory: '$(javaHome)'
+              mavenVersionOption: 'Default'
+              publishJUnitResults: false
+
+          - task: Maven@4
+            displayName: 'Upload Artifact to Nexus'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'deploy'
+              options: '-DskipTests -DaltDeploymentRepository=$(nexusMavenRepoId)::$(nexusMavenRepoUrl)'
+              mavenOptions: '$(mavenOpts)'
+              javaHomeOption: 'Path'
+              jdkDirectory: '$(javaHome)'
+              mavenVersionOption: 'Default'
+
+          - task: Maven@4
+            displayName: 'Upload Artifact to Azure Artifacts'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'deploy'
+              options: '-DskipTests -DaltDeploymentRepository=$(azureArtifactsFeed)::$(azureArtifactsUrl) -Daether.connector.http.preemptiveAuth=true -e'
+              mavenOptions: '$(mavenOpts)'
+              javaHomeOption: 'Path'
+              jdkDirectory: '$(javaHome)'
+              mavenVersionOption: 'Default'
+
+          - task: Docker@2
+            displayName: 'Docker Build & Push Image to Nexus'
+            inputs:
+              containerRegistry: '${{ variables.nexusDockerServiceConnection }}'
+              repository: '$(imageRepository)'
+              command: 'buildAndPush'
+              Dockerfile: '**/Dockerfile'
+              tags: |
+                $(imageTag)
